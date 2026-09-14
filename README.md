@@ -4,14 +4,14 @@
 
 ## 下载
 
-Release 里下 APK 直接装：[v1.0 APK](https://github.com/super-xia/WebDAVCast/releases/download/v1.0/WebDAVCast-1.0-release.apk)
+Release 里下 APK 直接装：[v1.0.1 APK](https://github.com/super-xia/WebDAVCast/releases/download/v1.0.1/WebDAVCast-1.0.1-release.apk)
 
 ## 用法
 
 1. 首页填三项：**服务器清单页地址**、**WebDAV 用户名**、**WebDAV 密码**，点"查询可用的服务器"
 2. 选一台服务器，进目录翻视频
 3. 点视频进播放页：顶部 16:9 小窗 + 文件名，下面是投屏区
-4. 点播放器右下角全屏按钮 → 横屏沉浸全屏看；返回键或再点一次退出，回到播放页原样
+4. 点播放器右下角全屏按钮 → 横屏沉浸全屏看（纯画面、无文件名/按钮）；再点或按返回键退出，回到播放页原样
 
 ## 投屏
 
@@ -31,7 +31,7 @@ export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ```bash
 B=$ANDROID_SDK/build-tools/34.0.0
 $B/zipalign -f -p 4 app-release-unsigned.apk aligned.apk
-$B/apksigner sign --ks <your.keystore> --out WebDAVCast-1.0-release.apk aligned.apk
+$B/apksigner sign --ks <your.keystore> --out WebDAVCast-1.0.1-release.apk aligned.apk
 ```
 
 ## 环境
