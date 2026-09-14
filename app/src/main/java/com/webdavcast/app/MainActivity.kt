@@ -7,7 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,9 +45,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.launch
 
 /** 首页:设置(B.com + 账号) → 选服务器 → 浏览目录 → 播放/投屏。全中文。 */
@@ -77,7 +73,12 @@ fun WebdavCastApp() {
     var serverPath by rememberSaveable { mutableStateOf("") }
     var path by rememberSaveable { mutableStateOf("/") }
     var videoUrl by rememberSaveable { mutableStateOf("") }
-    var videoEntry by rememberSaveable { mutableStateOf<DavEntry?>(null) }
+    // DavEntry 不是 Parcelable: 保存时拆成字段字符串, 恢复时重建(进程被杀后回来不崩、文件名还在)
+    var videoEntryRaw by rememberSaveable { mutableStateOf<String?>(null) }
+    val videoEntry = videoEntryRaw?.let { raw ->
+        val p = raw.split("|", limit = 5)
+        if (p.size >= 3) DavEntry(p[0], p[1] == "1", p[2], p.getOrElse(3) { "" }.toLongOrNull() ?: 0L, p.getOrElse(4) { "" }) else null
+    }
     // 从保存的字段重建 server(ServerEntry 是普通 data class, 直接存需要自定义 saver)
     val server = remember(serverHost, serverPort, serverName, serverPath) {
         if (serverHost.isNotBlank() && serverPort > 0) {
@@ -112,7 +113,8 @@ fun WebdavCastApp() {
             onWatch = { url, entry ->
                 // 记住当前位置, 返回时恢复
                 browseSavedIndex = browseListState.firstVisibleItemIndex
-                videoUrl = url; videoEntry = entry
+                videoUrl = url
+                videoEntryRaw = "${entry.name}|${if (entry.isDir) 1 else 0}|${entry.href}|${entry.size}|${entry.modified}"
                 screen = Screen.Player
             },
             // 返回: 不在根目录则回上级, 根目录才回首页
