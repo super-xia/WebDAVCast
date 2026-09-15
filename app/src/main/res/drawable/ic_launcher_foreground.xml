@@ -1,6 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 播放三角(居中偏左) -->
     <path android:fillColor="#FFFFFF"
-        android:pathData="M40,34 L76,54 L40,74 Z"/>
+        android:pathData="M38,36 L72,54 L38,72 Z"/>
+    <!-- 投屏波纹(右下角, 三条弧线模拟信号) -->
+    <path android:fillColor="#FFFFFF" android:fillAlpha="0.7"
+        android:pathData="M62,68 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0"/>
+    <path android:strokeColor="#FFFFFF" android:strokeAlpha="0.5"
+        android:strokeWidth="2.5" android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M56,72 Q62,66 68,72"/>
+    <path android:strokeColor="#FFFFFF" android:strokeAlpha="0.3"
+        android:strokeWidth="2.5" android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M52,76 Q62,64 72,76"/>
 </vector>
