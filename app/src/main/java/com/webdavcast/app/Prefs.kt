@@ -71,10 +71,14 @@ object Prefs {
         return out.sortedByDescending { it.watchedAt }
     }
 
-    /** 写入一条历史(同 URL 覆盖), 最多保留 200 条。 */
+    /** 写入一条历史, 最多保留 200 条。
+     *  去重规则: dirPath 非空时按目录去重(同目录只留最新一条);
+     *  dirPath 为空时退回按 URL 路径去重(兼容旧逻辑)。 */
     fun saveHistory(c: Context, url: String, title: String, positionMs: Long, durationMs: Long, dirPath: String = "") {
-        // 按路径键去重: 服务器换了URL前缀变了也算同一条, 更新进度不新增
-        val list = getHistory(c).filter { keyOf(it.url) != keyOf(url) }.toMutableList()
+        val dk = dirKeyOf(dirPath)
+        val list = getHistory(c).filter {
+            if (dk != "/") dirKeyOf(it.dirPath) != dk else keyOf(it.url) != keyOf(url)
+        }.toMutableList()
         list.add(0, PlayHistory(url, title, positionMs, durationMs, System.currentTimeMillis(), dirPath))
         if (list.size > 200) list.removeAt(list.lastIndex)
         sp(c).edit {
@@ -84,11 +88,16 @@ object Prefs {
         }
     }
 
-/** 历史匹配键: URL 去掉 scheme://host:port 后的路径部分。
- * 服务器地址变了(a.com→b.com)也算同一条, 只更新进度不新增。 */
+    /** 历史匹配键: URL 去掉 scheme://host:port 后的路径部分。
+     * 服务器地址变了(a.com→b.com)也算同一条, 只更新进度不新增。 */
 private fun keyOf(url: String): String {
     val after = url.substringAfter("://", url)
     return after.substringAfter("/", "/")
+}
+
+/** 目录键: 统一为 /path/ 格式(根目录为 /)。 */
+private fun dirKeyOf(dirPath: String): String {
+    return dirPath.trim().trim('/').let { if (it.isEmpty()) "/" else "/$it/" }
 }
 
     /** 按 URL 查历史(没有返回 null)。服务器变了也能按路径匹配到同一条。 */

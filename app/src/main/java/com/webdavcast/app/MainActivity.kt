@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Button
@@ -39,12 +40,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -118,6 +121,8 @@ fun WebdavCastApp() {
     val browseListState = rememberLazyListState()
     // 记录进入播放页前的滚动位置(返回时恢复)
     var browseSavedIndex by rememberSaveable { mutableStateOf(0) }
+    // 进入播放页的来源是否为历史: 从历史进入时返回直接回历史, 不回文件目录
+    var fromHistory by rememberSaveable { mutableStateOf(false) }
 
     when (screen) {
         Screen.Setup -> SetupScreen(
@@ -144,6 +149,7 @@ fun WebdavCastApp() {
             onWatch = { url, entry ->
                 // 记住当前位置, 返回时恢复
                 browseSavedIndex = browseListState.firstVisibleItemIndex
+                fromHistory = false
                 videoUrl = url
                 videoEntryRaw = "${entry.name}|${if (entry.isDir) 1 else 0}|${entry.href}|${entry.size}|${entry.modified}"
                 screen = Screen.Player
@@ -162,6 +168,7 @@ fun WebdavCastApp() {
         Screen.History -> HistoryScreen(
             onPlay = { h ->
                 // 从历史续播: 若服务器地址已变(如 a.com→b.com), 用当前服务器替换URL前缀重定位
+                fromHistory = true
                 videoUrl = relocateUrl(h.url, server)
                 videoEntryRaw = "${h.title}|0|${videoUrl}|${h.durationMs}|"
                 // 记住视频所在目录, 返回时回到该目录而不是首页
@@ -182,20 +189,18 @@ fun WebdavCastApp() {
         Screen.Player -> PlayerScreen(
             server = server, url = videoUrl, entry = videoEntry,
             currentPath = path,
-            onBack = {
-                // 从历史进入: 尝试恢复上次服务器, 能恢复就回Browse并停在历史目录, 否则回首页
-                if (server == null) {
-                    val ls = Prefs.getLastServer(ctx).split("|")
-                    if (ls.size >= 4 && ls[1].toIntOrNull() != null) {
-                        serverHost = ls[0]; serverPort = ls[1].toInt()
-                        serverName = ls[2]; serverPath = ls[3]
-                        screen = Screen.Browse
-                    } else screen = Screen.Setup
-                } else screen = Screen.Browse
+            onSwitchEpisode = { e ->
+                val s = server
+                if (s != null) {
+                    videoUrl = urlFor(s, e.href)
+                    videoEntryRaw = "${e.name}|0|${e.href}|${e.size}|${e.modified}"
+                }
             },
             onSystemBack = {
-                // 从历史进入: 尝试恢复上次服务器, 能恢复就回Browse并停在历史目录, 否则回首页
-                if (server == null) {
+                // 从历史进入: 返回直接回历史页; 从目录进入: 恢复服务器后回原目录(否则回首页)
+                if (fromHistory) {
+                    screen = Screen.History
+                } else if (server == null) {
                     val ls = Prefs.getLastServer(ctx).split("|")
                     if (ls.size >= 4 && ls[1].toIntOrNull() != null) {
                         serverHost = ls[0]; serverPort = ls[1].toInt()
@@ -636,8 +641,8 @@ private fun PlayerScreen(
     url: String,
     entry: DavEntry?,
     currentPath: String = "",
-    onBack: () -> Unit,
-    onSystemBack: () -> Unit = onBack,
+    onSwitchEpisode: (DavEntry) -> Unit,
+    onSystemBack: () -> Unit,
 ) {
     val name = entry?.name ?: ""
     val videoSize = entry?.size ?: 0L
@@ -711,6 +716,78 @@ private fun PlayerScreen(
     var dragging by remember { mutableStateOf(false) }
     var dragPosMs by remember { mutableStateOf(0L) }
 
+    // ===== 选集/上下集: 当前目录下的可播放视频清单(自然序) =====
+    var episodes by remember { mutableStateOf<List<DavEntry>?>(null) }
+    var episodesLoading by remember { mutableStateOf(false) }
+    var showEpisodes by remember { mutableStateOf(false) }
+    // 当前播放文件名(用于在选集里定位); URL 可能含编码, 统一解码后再比较
+    val currentName = remember(url, entry) {
+        val raw = entry?.name?.takeIf { it.isNotBlank() } ?: url.substringAfterLast('/')
+        try { java.net.URLDecoder.decode(raw, "UTF-8") } catch (e: Exception) { raw }
+    }
+    val currentIdx = remember(episodes, currentName) {
+        episodes?.indexOfFirst { it.name == currentName } ?: -1
+    }
+
+    // 进入播放页即拉取当前目录的视频清单(供选集/上下集跳转)
+    LaunchedEffect(server, currentPath) {
+        val s = server ?: return@LaunchedEffect
+        if (currentPath.isBlank()) return@LaunchedEffect
+        episodesLoading = true
+        episodes = null
+        val client = WebDavClient("http://${s.host}:${s.port}${s.basePath}", user, pass)
+        val result = client.list(currentPath)
+        episodesLoading = false
+        if (result.error == null) {
+            episodes = result.entries
+                .filter { !it.isDir && fileType(it.name).third }
+                .sortedWith { x, y -> naturalCompare(x.name, y.name) }
+        }
+    }
+
+    // 用 rememberUpdatedState 让监听器/回调读到最新 url/name(切集后不残留旧值)
+    val latestUrl by rememberUpdatedState(url)
+    val latestName by rememberUpdatedState(name)
+
+    // 切到指定集: 先保存当前进度, 再通知父级换 URL/条目(触发 LaunchedEffect(url) 重新装载)
+    fun switchToEpisode(e: DavEntry) {
+        if (server == null) return
+        val pos = player.currentPosition
+        val dur = player.duration
+        if (dur > 0 && pos > 0) {
+            Prefs.saveHistory(ctx, latestUrl, latestName.ifEmpty { latestUrl.substringAfterLast('/') }, pos, dur, currentPath)
+        }
+        onSwitchEpisode(e)
+        showEpisodes = false
+        lastControlAction = System.currentTimeMillis()
+    }
+
+    fun gotoPrev() {
+        val list = episodes
+        if (list == null) {
+            android.widget.Toast.makeText(ctx, "选集加载中…", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (currentIdx <= 0) {
+            android.widget.Toast.makeText(ctx, "已经是第一集", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        switchToEpisode(list[currentIdx - 1])
+    }
+
+    fun gotoNext() {
+        val list = episodes
+        if (list == null) {
+            android.widget.Toast.makeText(ctx, "选集加载中…", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (currentIdx < 0 || currentIdx >= list.size - 1) {
+            android.widget.Toast.makeText(ctx, "已经是最后一集", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        switchToEpisode(list[currentIdx + 1])
+    }
+
     // 进度轮询: 更新播放状态/进度/总时长(驱动控制条UI)
     LaunchedEffect(url) {
         while (true) {
@@ -771,17 +848,17 @@ private fun PlayerScreen(
                 if (cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
                     detail = "HTTP ${cause.responseCode}: ${detail}"
                 }
-                playError = "播放失败 [${error.errorCodeName}]: $detail\nURL: $url"
+                playError = "播放失败 [${error.errorCodeName}]: $detail\nURL: $latestUrl"
             }
 
             // 播放完提示
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == androidx.media3.common.Player.STATE_ENDED) {
                     android.widget.Toast.makeText(
-                        ctx, "🎬 播放完毕:${name.ifEmpty { "视频" }}", android.widget.Toast.LENGTH_SHORT
+                        ctx, "🎬 播放完毕:${latestName.ifEmpty { "视频" }}", android.widget.Toast.LENGTH_SHORT
                     ).show()
                     // 播完即视为进度清零(下次从头)
-                    Prefs.saveHistory(ctx, url, name.ifEmpty { url.substringAfterLast('/') }, 0L, 0L, currentPath)
+                    Prefs.saveHistory(ctx, latestUrl, latestName.ifEmpty { latestUrl.substringAfterLast('/') }, 0L, 0L, currentPath)
                 }
             }
         })
@@ -805,7 +882,7 @@ private fun PlayerScreen(
             val pos = player.currentPosition
             val dur = player.duration
             if (dur > 0 && pos > 0) {
-                Prefs.saveHistory(ctx, url, name.ifEmpty { url.substringAfterLast('/') }, pos, dur, currentPath)
+                Prefs.saveHistory(ctx, latestUrl, latestName.ifEmpty { latestUrl.substringAfterLast('/') }, pos, dur, currentPath)
             }
             player.release()
         }
@@ -995,30 +1072,57 @@ private fun PlayerScreen(
                 }
             }
 
-            // ===== 自绘控制条(透明底板, 参考图布局: 音频左|播放居中|倍速右) =====
+            // ===== 全屏顶栏: 文件名 + 选集(半透明黑底) =====
+            if (controlsVisible && isFullscreen) {
+                Row(
+                    Modifier.align(Alignment.TopStart).fillMaxWidth()
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f))
+                        .clickable(
+                            interactionSource = androidx.compose.foundation.interaction.MutableInteractionSource(),
+                            indication = null
+                        ) { /* 吃掉点击 */ }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        name.ifEmpty { "视频" },
+                        fontSize = 15.sp, color = androidx.compose.ui.graphics.Color.White,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "选集 ▾",
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                        color = androidx.compose.ui.graphics.Color.White,
+                        modifier = Modifier.clickable {
+                            lastControlAction = System.currentTimeMillis()
+                            showEpisodes = true
+                        }.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // ===== 自绘控制条(透明底板) =====
             if (controlsVisible) {
                 Column(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                        .background(androidx.compose.ui.graphics.Color.Transparent)
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.4f))
                         .clickable(
                             interactionSource = androidx.compose.foundation.interaction.MutableInteractionSource(),
                             indication = null
                         ) { /* 控制条区域点击吃掉事件, 不触发视频点击 */ }
                 ) {
-                    // 按钮行: 音频 | 弹性 | 上一个 | 弹性 | 快退5s | 弹性 | ▶暂停(大) | 弹性 | 快进5s | 弹性 | 下一个 | 弹性 | 倍速
+                    // 按钮行: 上一集 | 快退5s | 播放/暂停 | 快进5s | 下一集 | 倍速
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 音频(最左)
-                        Icon(CtrlIcons.Audiotrack, null, tint = Color.White,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp).clickable { /* 音频占位 */ }.size(22.dp))
-                        Spacer(Modifier.weight(1f))
-                        // 上一个
+                        Spacer(Modifier.weight(0.3f))
+                        // 上一集
                         Icon(CtrlIcons.SkipPrevious, null, tint = Color.White,
                             modifier = Modifier.padding(8.dp).clickable {
                                 lastControlAction = System.currentTimeMillis()
-                            player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0))
+                                gotoPrev()
                             }.size(22.dp))
                         Spacer(Modifier.weight(1f))
                         // 快退5s
@@ -1047,10 +1151,13 @@ private fun PlayerScreen(
                                 player.seekTo((player.currentPosition + 5_000).coerceAtMost(if (d > 0) d else Long.MAX_VALUE))
                             }.size(26.dp))
                         Spacer(Modifier.weight(1f))
-                        // 下一个
+                        // 下一集
                         Icon(CtrlIcons.SkipNext, null, tint = Color.White,
-                            modifier = Modifier.padding(8.dp).clickable { /* 下一个占位 */ }.size(22.dp))
-                        Spacer(Modifier.weight(1f))
+                            modifier = Modifier.padding(8.dp).clickable {
+                                lastControlAction = System.currentTimeMillis()
+                                gotoNext()
+                            }.size(22.dp))
+                        Spacer(Modifier.weight(0.3f))
                         // 倍速(最右, 点击切换档位)
                         val speedLabel = if (speed == speed.toInt().toFloat()) "${speed.toInt()}x"
                             else "${speed.toString().trimEnd('0').trimEnd('.')}x"
@@ -1156,6 +1263,18 @@ private fun PlayerScreen(
                             fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                     }
                 }
+                // 选集入口: 打开当前目录视频清单
+                Text(
+                    "选集 ▾",
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable {
+                            lastControlAction = System.currentTimeMillis()
+                            showEpisodes = true
+                        }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                )
             }
         }
 
@@ -1264,10 +1383,71 @@ private fun PlayerScreen(
 
         Spacer(Modifier.weight(1f))
         } // end if (!isFullscreen) —— 投屏面板(文件名/搜索/手动)全在此分支内, 全屏纯视频
-        if (!isFullscreen) {
-            Button(onClick = onBack, Modifier.fillMaxWidth().height(52.dp)) {
-                Text("← 返回", fontSize = 17.sp)
-            }
+        // 选集弹窗: 列出当前目录所有可播放视频, 点击切集
+        if (showEpisodes) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showEpisodes = false },
+                title = { Text("选集${episodes?.let { "(${it.size} 集)" } ?: ""}") },
+                text = {
+                    Column(Modifier.fillMaxWidth()) {
+                        when {
+                            episodesLoading -> Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("加载中…")
+                            }
+                            episodes == null || episodes!!.isEmpty() -> Text("该目录暂无视频或未连接服务器")
+                            else -> {
+                                val list = episodes!!
+                                val epListState = rememberLazyListState()
+                                val density = LocalDensity.current
+                                // 打开弹窗时滚动到当前集并居中
+                                LaunchedEffect(showEpisodes, currentIdx, list) {
+                                    if (currentIdx >= 0) {
+                                        kotlinx.coroutines.delay(50)
+                                        val viewport = epListState.layoutInfo.viewportSize.height
+                                        val itemPx = with(density) { 44.dp.toPx() }.toInt()
+                                        if (viewport > 0 && itemPx > 0) {
+                                            epListState.scrollToItem(currentIdx, (itemPx - viewport) / 2)
+                                        } else {
+                                            epListState.scrollToItem(currentIdx)
+                                        }
+                                    }
+                                }
+                                LazyColumn(state = epListState, modifier = Modifier.height(360.dp)) {
+                                    itemsIndexed(list) { i, e ->
+                                        val isCur = i == currentIdx
+                                        Row(
+                                            Modifier.fillMaxWidth()
+                                                .height(44.dp)
+                                                .clickable { switchToEpisode(e) }
+                                                .background(if (isCur) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent)
+                                                .padding(vertical = 10.dp, horizontal = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                "${i + 1}.",
+                                                fontSize = 14.sp,
+                                                fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isCur) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                e.name, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                                fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isCur) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = { showEpisodes = false }) { Text("关闭") }
+                },
+            )
         }
     }
 }
@@ -1363,6 +1543,32 @@ private fun isDeeperPath(oldPath: String, newPath: String): Boolean {
     val o = oldPath.trimEnd('/')
     val n = newPath.trimEnd('/')
     return n.startsWith(o + "/") && n.length > o.length
+}
+
+/** 自然排序: 数字段按数值大小比较(第1集 < 第2集 < 第10集), 非数字段按字典序。 */
+private fun naturalCompare(a: String, b: String): Int {
+    var i = 0
+    var j = 0
+    while (i < a.length && j < b.length) {
+        val ca = a[i]; val cb = b[j]
+        if (ca.isDigit() && cb.isDigit()) {
+            var ni = i; while (ni < a.length && a[ni].isDigit()) ni++
+            var nj = j; while (nj < b.length && b[nj].isDigit()) nj++
+            val na = a.substring(i, ni).trimStart('0').let { if (it.isEmpty()) "0" else it }
+            val nb = b.substring(j, nj).trimStart('0').let { if (it.isEmpty()) "0" else it }
+            val cmp = when {
+                na.length != nb.length -> na.length - nb.length
+                else -> na.compareTo(nb)
+            }
+            if (cmp != 0) return if (cmp > 0) 1 else -1
+            i = ni; j = nj
+        } else {
+            val c = ca.compareTo(cb)
+            if (c != 0) return c
+            i++; j++
+        }
+    }
+    return (a.length - i) - (b.length - j)
 }
 
 private val VIDEO_EXTS = setOf("mp4","mkv","avi","mov","wmv","flv","webm","m4v","3gp","ts","m2ts","mts","mpg","mpeg","rmvb","rm","vob")
