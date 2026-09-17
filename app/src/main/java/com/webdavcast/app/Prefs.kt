@@ -72,13 +72,11 @@ object Prefs {
     }
 
     /** 写入一条历史, 最多保留 200 条。
-     *  去重规则: dirPath 非空时按目录去重(同目录只留最新一条);
-     *  dirPath 为空时退回按 URL 路径去重(兼容旧逻辑)。 */
+     *  去重规则: 按 URL 路径去重(每个文件独立保留一条进度),
+     *  服务器地址变了(a.com→b.com)也算同一条, 只更新进度不新增。 */
     fun saveHistory(c: Context, url: String, title: String, positionMs: Long, durationMs: Long, dirPath: String = "") {
-        val dk = dirKeyOf(dirPath)
-        val list = getHistory(c).filter {
-            if (dk != "/") dirKeyOf(it.dirPath) != dk else keyOf(it.url) != keyOf(url)
-        }.toMutableList()
+        val k = keyOf(url)
+        val list = getHistory(c).filter { keyOf(it.url) != k }.toMutableList()
         list.add(0, PlayHistory(url, title, positionMs, durationMs, System.currentTimeMillis(), dirPath))
         if (list.size > 200) list.removeAt(list.lastIndex)
         sp(c).edit {
@@ -103,6 +101,22 @@ private fun dirKeyOf(dirPath: String): String {
     /** 按 URL 查历史(没有返回 null)。服务器变了也能按路径匹配到同一条。 */
     fun getHistoryByUrl(c: Context, url: String): PlayHistory? =
         getHistory(c).firstOrNull { keyOf(it.url) == keyOf(url) }
+
+    /** 历史页展示用: 每个目录只保留最新观看的一条(watchedAt 最新的那条)。
+     *  dirPath 为空(旧数据)时从 URL 路径推断目录, 避免全归到根目录一组。 */
+    fun getHistoryForList(c: Context): List<PlayHistory> {
+        val list = getHistory(c)          // 已按 watchedAt 降序
+        val seen = mutableSetOf<String>()
+        val out = mutableListOf<PlayHistory>()
+        for (h in list) {
+            val dk = if (h.dirPath.isBlank()) {
+                val p = h.url.substringAfter("://", "").substringAfter("/", "")
+                dirKeyOf(p.substringBeforeLast("/", ""))
+            } else dirKeyOf(h.dirPath)
+            if (seen.add(dk)) out.add(h)
+        }
+        return out
+    }
 
     fun clearHistory(c: Context) = sp(c).edit { remove("play_history") }
 }

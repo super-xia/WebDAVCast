@@ -333,7 +333,7 @@ private fun SetupScreen(
             Modifier.fillMaxWidth().padding(top = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val histCount = Prefs.getHistory(ctx).size
+            val histCount = Prefs.getHistoryForList(ctx).size
             Text(
                 if (histCount > 0) "📺 已看 $histCount 个视频,点此继续看" else "📺 暂无观看记录",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.primary,
@@ -358,7 +358,7 @@ private fun HistoryScreen(
     onBack: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    var historyList by remember { mutableStateOf(Prefs.getHistory(ctx)) }
+    var historyList by remember { mutableStateOf(Prefs.getHistoryForList(ctx)) }
     val scope = rememberCoroutineScope()
     // 系统返回键: 回首页(否则直接退到桌面)
     androidx.activity.compose.BackHandler(onBack = onBack)
@@ -1072,6 +1072,17 @@ private fun PlayerScreen(
                 }
             }
 
+            // 全屏且控件隐藏时, 右上角显示系统时间 HH:mm(秒级刷新)
+            var clockNow by remember { mutableStateOf("") }
+            LaunchedEffect(isFullscreen, controlsVisible) {
+                if (!isFullscreen || controlsVisible) { clockNow = ""; return@LaunchedEffect }
+                while (true) {
+                    clockNow = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                        .format(java.util.Date())
+                    kotlinx.coroutines.delay(1000)
+                }
+            }
+
             // ===== 全屏顶栏: 文件名 + 选集(半透明黑底) =====
             if (controlsVisible && isFullscreen) {
                 Row(
@@ -1100,6 +1111,16 @@ private fun PlayerScreen(
                         }.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
+            }
+
+            // 控件隐藏时右上角时钟(仅全屏, 无底板透明)
+            if (isFullscreen && !controlsVisible) {
+                Text(
+                    clockNow,
+                    fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.White,
+                    modifier = Modifier.align(Alignment.TopEnd)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                )
             }
 
             // ===== 自绘控制条(透明底板) =====
