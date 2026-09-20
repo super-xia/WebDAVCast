@@ -40,3 +40,7 @@ release keystore 自备（项目未配置 keystore 时回退 debug 签名，保�
 - `WebDavClient.kt` — Basic 认证 PROPFIND 目录树
 - `DlnaCaster.kt` / `DlnaDevice.kt` — SSDP 发现 + 直连投屏
 - `Prefs.kt` — SharedPreferences（清单地址/账号/服务器缓存/播放历史）
+
+## 相关项目
+
+- 📺 [WebDAVCast TV（电视版）](https://github.com/super-xia/WebDAVCast-TV) — 遥控器电视端，同一套「清单页动态解析服务器地址 + WebDAV 浏览」核心逻辑，交互层换成遥控器焦点驱动
