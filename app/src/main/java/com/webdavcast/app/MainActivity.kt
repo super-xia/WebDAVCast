@@ -651,8 +651,8 @@ private fun PlayerScreen(
     val scope = rememberCoroutineScope()
     val user = Prefs.getUser(ctx)
     val pass = Prefs.getPass(ctx)
-    // 全屏状态
-    var isFullscreen by remember { mutableStateOf(false) }
+    // 全屏状态(rememberSaveable: Activity重建后状态不丢失, 保证与真实方向一致)
+    var isFullscreen by rememberSaveable { mutableStateOf(false) }
     val activity = LocalContext.current as? android.app.Activity
     // 非全屏视频高度: dp单位按当前屏幕宽度算16:9, 退出全屏必与刚进去一致
     val videoHeight = (LocalConfiguration.current.screenWidthDp * 9f / 16f).dp
@@ -676,6 +676,13 @@ private fun PlayerScreen(
             act.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             act.window?.decorView?.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
         }
+    }
+
+    // 兜底: 每次重组强制让常亮标志与全屏状态一致(防止任何路径残留标志)
+    androidx.compose.runtime.SideEffect {
+        val act = activity ?: return@SideEffect
+        if (isFullscreen) act.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else act.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     // 离开播放页时清除常亮标志, 避免残留
