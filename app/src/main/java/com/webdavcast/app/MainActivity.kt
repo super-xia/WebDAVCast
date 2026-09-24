@@ -662,6 +662,8 @@ private fun PlayerScreen(
         isFullscreen = !isFullscreen
         val act = activity ?: return
         if (isFullscreen) {
+            // 全屏播放保持屏幕常亮, 不自动息屏
+            act.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             act.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             act.window?.decorView?.systemUiVisibility = (
                 android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or
@@ -669,8 +671,17 @@ private fun PlayerScreen(
                     android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                 )
         } else {
+            // 退出全屏恢复系统息屏
+            act.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             act.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             act.window?.decorView?.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
+        }
+    }
+
+    // 离开播放页时清除常亮标志, 避免残留
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
