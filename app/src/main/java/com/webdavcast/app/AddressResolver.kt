@@ -51,45 +51,48 @@ class AddressResolver(private val context: Context) {
             .replace(Regex("</?(p|div|li|tr|span)[^>]*>", RegexOption.IGNORE_CASE), "\n")
             .replace(Regex("<[^>]+>"), " ")
 
-        // 3. 锚点法: 找所有 host:port(/path) 锚点, 名称取锚点后到下一个锚点前的片段
-        val anchors = Regex("""(?:https?://)?([A-Za-z0-9.\-_]+)[:：](\d{1,5})((?:/[^\s,，;]*)?)""")
+        // 3. 锚点法: 找所有 [scheme://]host:port(/path) 锚点, 名称取锚点后到下一个锚点前的片段
+        // group1 = scheme(可选), group2 = host, group3 = port, group4 = path
+        val anchors = Regex("""(?:(https?)://)?([A-Za-z0-9.\-_]+)[:：](\d{1,5})((?:/[^\s,，;]*)?)""")
             .findAll(clean).toList()
 
         val out = mutableListOf<ServerEntry>()
         for (i in anchors.indices) {
             val a = anchors[i]
-            val host = a.groupValues[1].trim()
-            val port = a.groupValues[2].toIntOrNull() ?: continue
+            val scheme = a.groupValues[1].ifEmpty { "http" }.lowercase()
+            val host = a.groupValues[2].trim()
+            val port = a.groupValues[3].toIntOrNull() ?: continue
             if (port !in 1..65535) continue
-            val path = a.groupValues[3].trim().removeSuffix("/")
+            val path = a.groupValues[4].trim().removeSuffix("/")
             // 名称 = 锚点后到下一个锚点前的文本
             val end = if (i + 1 < anchors.size) anchors[i + 1].range.first else clean.length
             val tail = clean.substring(a.range.last + 1, end)
             var name = ""
             val m = Regex("""[,，;]\s*([^\n,，;]{1,20})""").find(tail)
             if (m != null) name = m.groupValues[1].trim()
-            else if (tail.isNotBlank()) name = tail.trim().split(Regex("\\s+"))[0].take(20)
-            out += ServerEntry(host, port, name, path)
+            else if (tail.isNotBlank()) name = tail.trim().split(Regex("""\s+"""))[0].take(20)
+            out += ServerEntry(host, port, name, path, scheme)
         }
         // 不去重: B.com 页面是权威列表, 给几条显示几条(同 host:port 不同名称的条目都要保留)
         out
     }
 
     companion object {
-        /** ServerEntry 列表序列化为缓存字符串(每行: host|port|name|basePath)。 */
+        /** ServerEntry 列表序列化为缓存字符串(每行: host|port|name|basePath|scheme)。 */
         fun encode(list: List<ServerEntry>): String =
-            list.joinToString("\n") { "${it.host}|${it.port}|${it.name}|${it.basePath}" }
+            list.joinToString("\n") { "${it.host}|${it.port}|${it.name}|${it.basePath}|${it.scheme}" }
 
-        /** 从缓存字符串还原列表。 */
+        /** 从缓存字符串还原列表(兼容旧版4字段, 缺 scheme 默认 http)。 */
         fun decode(s: String): List<ServerEntry> {
             if (s.isBlank()) return emptyList()
             val out = mutableListOf<ServerEntry>()
             for (line in s.lineSequence()) {
-                val p = line.split("|", limit = 4)
+                val p = line.split("|", limit = 5)
                 if (p.size < 2) continue
                 val port = p[1].toIntOrNull() ?: continue
                 if (port !in 1..65535) continue
-                out += ServerEntry(p[0], port, p.getOrElse(2) { "" }, p.getOrElse(3) { "" })
+                val scheme = p.getOrElse(4) { "http" }.ifEmpty { "http" }.lowercase()
+                out += ServerEntry(p[0], port, p.getOrElse(2) { "" }, p.getOrElse(3) { "" }, scheme)
             }
             return out
         }

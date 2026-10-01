@@ -30,10 +30,10 @@ object Prefs {
     fun getLast(c: Context): String = sp(c).getString("last", "") ?: ""
     fun setLast(c: Context, v: String) = sp(c).edit { putString("last", v) }
 
-    // 上次连接的服务器信息(host|port|name|basePath), 冷启动恢复用
+    // 上次连接的服务器信息(host|port|name|basePath|scheme), 冷启动恢复用
     fun getLastServer(c: Context): String = sp(c).getString("last_server", "") ?: ""
-    fun setLastServer(c: Context, host: String, port: Int, name: String, basePath: String) =
-        sp(c).edit { putString("last_server", "$host|$port|$name|$basePath") }
+    fun setLastServer(c: Context, host: String, port: Int, name: String, basePath: String, scheme: String = "http") =
+        sp(c).edit { putString("last_server", "$host|$port|$name|$basePath|$scheme") }
 
     // 服务器列表缓存: 加载成功后保存, 启动直接读缓存(不自动刷新)
     fun getServerCache(c: Context): String = sp(c).getString("servers_cache", "") ?: ""

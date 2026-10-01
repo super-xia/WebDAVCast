@@ -95,12 +95,14 @@ fun WebdavCastApp() {
     var serverPort by rememberSaveable { mutableStateOf(0) }
     var serverName by rememberSaveable { mutableStateOf("") }
     var serverPath by rememberSaveable { mutableStateOf("") }
+    var serverScheme by rememberSaveable { mutableStateOf("http") }
     // 冷启动恢复上次服务器(host|port|name|basePath), 让历史记录也能直达目录
     remember {
         val ls = Prefs.getLastServer(ctx).split("|")
-        if (serverHost.isBlank() && ls.size >= 4 && ls[1].toIntOrNull() != null) {
+        if (serverHost.isBlank() && ls.size >= 5 && ls[1].toIntOrNull() != null) {
             serverHost = ls[0]; serverPort = ls[1].toInt()
             serverName = ls[2]; serverPath = ls[3]
+            serverScheme = ls[4].ifEmpty { "http" }.lowercase()
         }
     }
     var path by rememberSaveable { mutableStateOf("/") }
@@ -131,7 +133,8 @@ fun WebdavCastApp() {
                 serverPort = s.port
                 serverName = s.name
                 serverPath = s.basePath
-                Prefs.setLastServer(ctx, s.host, s.port, s.name, s.basePath)
+                serverScheme = s.scheme
+                Prefs.setLastServer(ctx, s.host, s.port, s.name, s.basePath, s.scheme)
                 path = "/"
                 browseSavedIndex = 0
                 screen = Screen.Browse
@@ -175,8 +178,8 @@ fun WebdavCastApp() {
                 // 服务器为空时从last_server恢复(冷启动后首次点历史, 也能知道basePath)
                 val srv = server ?: run {
                     val ls = Prefs.getLastServer(ctx).split("|")
-                    if (ls.size >= 4 && ls[1].toIntOrNull() != null) {
-                        ServerEntry(ls[0], ls[1].toInt(), ls[2], ls[3])
+                    if (ls.size >= 5 && ls[1].toIntOrNull() != null) {
+                        ServerEntry(ls[0], ls[1].toInt(), ls[2], ls[3], ls[4].ifEmpty { "http" }.lowercase())
                     } else null
                 }
                 videoUrl = relocateUrl(h.url, srv)
@@ -202,9 +205,10 @@ fun WebdavCastApp() {
                     screen = Screen.History
                 } else if (server == null) {
                     val ls = Prefs.getLastServer(ctx).split("|")
-                    if (ls.size >= 4 && ls[1].toIntOrNull() != null) {
+                    if (ls.size >= 5 && ls[1].toIntOrNull() != null) {
                         serverHost = ls[0]; serverPort = ls[1].toInt()
                         serverName = ls[2]; serverPath = ls[3]
+                        serverScheme = ls[4].ifEmpty { "http" }.lowercase()
                         screen = Screen.Browse
                     } else screen = Screen.Setup
                 } else screen = Screen.Browse
@@ -461,7 +465,7 @@ private fun BrowseScreen(
         error = ""
         scope.launch {
             val client = WebDavClient(
-                "http://${s.host}:${s.port}${s.basePath}",
+                "${s.scheme}://${s.host}:${s.port}${s.basePath}",
                 Prefs.getUser(ctx), Prefs.getPass(ctx)
             )
             val result = client.list(currentPath)
@@ -590,7 +594,7 @@ private fun urlFor(s: ServerEntry, href: String): String {
     } catch (e: Exception) {
         p
     }
-    return "http://${s.host}:${s.port}$encoded"
+    return "${s.scheme}://${s.host}:${s.port}$encoded"
 }
 
 /** 历史URL重定位: 服务器地址变了(a.com→b.com)时, 用当前服务器替换URL前缀。
@@ -602,7 +606,7 @@ private fun relocateUrl(oldUrl: String, server: ServerEntry?): String {
     // 取旧URL去掉 scheme://host:port 后的路径部分
     val afterScheme = oldUrl.substringAfter("://", "")
     val pathPart = afterScheme.substringAfter("/", "")
-    return "$scheme://${server.host}:${server.port}/${pathPart.trimStart('/')}"
+    return "${server.scheme}://${server.host}:${server.port}/${pathPart.trimStart('/')}"
 }
 
 /** 从视频URL推断所在目录(相对路径, 去 basePath 前缀)。
@@ -699,10 +703,7 @@ private fun PlayerScreen(
 
     val player = remember {
         // 用 OkHttpDataSource: OkHttp 自动处理中文URL编码、302重定向跟随、Basic认证头
-        val okHttp = okhttp3.OkHttpClient.Builder()
-            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
+        val okHttp = UnsafeOkHttp.client()
         val dsFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttp)
             .setUserAgent("WebDAVCast/1.0")
             .setDefaultRequestProperties(
@@ -753,7 +754,7 @@ private fun PlayerScreen(
         if (currentPath.isBlank()) return@LaunchedEffect
         episodesLoading = true
         episodes = null
-        val client = WebDavClient("http://${s.host}:${s.port}${s.basePath}", user, pass)
+        val client = WebDavClient("${s.scheme}://${s.host}:${s.port}${s.basePath}", user, pass)
         val result = client.list(currentPath)
         episodesLoading = false
         if (result.error == null) {

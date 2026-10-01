@@ -10,6 +10,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.StringReader
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 /** WebDAV 目录条目。 */
 data class DavEntry(
@@ -26,16 +31,36 @@ data class DavListResult(
     val error: String? = null,
 )
 
+/**
+ * 自签名证书场景(局域网自托管 NAS 常见)下的 OkHttp 构建器。
+ * 信任所有证书且不做主机名校验 —— 仅用于内网自托管 WebDAV, 不要用于公网敏感服务。
+ */
+object UnsafeOkHttp {
+    fun client(): OkHttpClient {
+        val trustAll = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        }
+        val ssl = SSLContext.getInstance("TLS").apply {
+            init(null, arrayOf<TrustManager>(trustAll), SecureRandom())
+        }
+        return OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .sslSocketFactory(ssl.socketFactory, trustAll)
+            .hostnameVerifier { _, _ -> true }
+            .build()
+    }
+}
+
 /** 极简 WebDAV 客户端:PROPFIND 列目录 + Basic 认证。 */
 class WebDavClient(
     private val baseUrl: String,
     private val user: String,
     private val pass: String,
 ) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
+    private val client = UnsafeOkHttp.client()
 
     private val auth = Credentials.basic(user, pass)
 

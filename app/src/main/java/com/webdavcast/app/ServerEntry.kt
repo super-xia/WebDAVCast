@@ -6,10 +6,11 @@ data class ServerEntry(
     val port: Int,
     val name: String,
     val basePath: String = "",
+    val scheme: String = "http",
 ) {
     val display: String
         get() {
-            val addr = "$host:$port$basePath"
+            val addr = "$scheme://$host:$port$basePath"
             return if (name.isBlank()) addr else "$name ($addr)"
         }
 }
