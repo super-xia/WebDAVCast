@@ -25,10 +25,11 @@ data class DavEntry(
     val modified: String = "",
 )
 
-/** 列目录结果:entries 或 error 二选一。 */
+/** 列目录结果:entries 或 error 二选一。baseUsed 记录实际成功的完整 base URL(自动切换 scheme 后回写)。 */
 data class DavListResult(
     val entries: List<DavEntry> = emptyList(),
     val error: String? = null,
+    val baseUsed: String? = null,
 )
 
 /**
@@ -65,7 +66,40 @@ class WebDavClient(
     private val auth = Credentials.basic(user, pass)
 
     suspend fun list(path: String): DavListResult = withContext(Dispatchers.IO) {
-        val url = urlOf(path)
+        val primary = urlOf(path)
+        // 自动探测: 若当前 scheme(http/https)失败, 尝试互换后重试。
+        // 解决"缓存/默认 scheme 与实际不符"导致的 400(http 请求打到了 https 端口)。
+        val candidates = buildList {
+            add(primary)
+            val swapped = swapScheme(primary)
+            if (swapped != null) add(swapped)
+        }
+        var lastError: String? = null
+        for (candidate in candidates) {
+            val result = tryList(candidate, path) ?: continue
+            if (result.error == null) {
+                // 自动切换成功: 回传实际生效的协议, 让调用方修正 serverScheme(否则后续播放 URL 仍会是错的)
+                val usedScheme = if (candidate.startsWith("https://")) "https" else "http"
+                return@withContext result.copy(baseUsed = usedScheme)
+            }
+            lastError = result.error
+            // 只有可能是 scheme 问题的错误才继续尝试下一个, 避免无谓重试(401/403/404 等)
+            if (lastError != null && lastError !in setOf(
+                    "服务器错误(HTTP 400)", "连接失败"
+                )) break
+        }
+        DavListResult(error = lastError ?: "连接失败")
+    }
+
+    private fun swapScheme(url: String): String? {
+        return when {
+            url.startsWith("https://") -> "http://" + url.substringAfter("https://")
+            url.startsWith("http://") -> "https://" + url.substringAfter("http://")
+            else -> null
+        }
+    }
+
+    private fun tryList(url: String, path: String): DavListResult? {
         val body = """<?xml version="1.0" encoding="utf-8"?>
 <d:propfind xmlns:d="DAV:">
   <d:prop>
@@ -81,7 +115,7 @@ class WebDavClient(
             .header("Depth", "1")
             .header("Authorization", auth)
             .build()
-        try {
+        return try {
             client.newCall(req).execute().use { resp ->
                 when {
                     !resp.isSuccessful -> DavListResult(error = httpError(resp.code))
@@ -94,7 +128,7 @@ class WebDavClient(
                 }
             }
         } catch (e: Exception) {
-            DavListResult(error = "连接失败: ${e.message ?: e.javaClass.simpleName}")
+            DavListResult(error = "连接失败")
         }
     }
 

@@ -114,9 +114,9 @@ fun WebdavCastApp() {
         if (p.size >= 3) DavEntry(p[0], p[1] == "1", p[2], p.getOrElse(3) { "" }.toLongOrNull() ?: 0L, p.getOrElse(4) { "" }) else null
     }
     // 从保存的字段重建 server(ServerEntry 是普通 data class, 直接存需要自定义 saver)
-    val server = remember(serverHost, serverPort, serverName, serverPath) {
+    val server = remember(serverHost, serverPort, serverName, serverPath, serverScheme) {
         if (serverHost.isNotBlank() && serverPort > 0) {
-            ServerEntry(serverHost, serverPort, serverName, serverPath)
+            ServerEntry(serverHost, serverPort, serverName, serverPath, serverScheme)
         } else null
     }
     // 浏览列表滚动状态提升到父级: 进入播放页再返回时保留滚动位置
@@ -167,6 +167,7 @@ fun WebdavCastApp() {
                 if (path != "/") path = parentPathOf(path)
                 else screen = Screen.Setup
             },
+            onSchemeResolved = { serverScheme = it },
         )
         Screen.History -> HistoryScreen(
             onPlay = { h ->
@@ -213,6 +214,7 @@ fun WebdavCastApp() {
                     } else screen = Screen.Setup
                 } else screen = Screen.Browse
             },
+            onSchemeResolved = { serverScheme = it },
         )
     }
 }
@@ -439,6 +441,7 @@ private fun BrowseScreen(
     onWatch: (String, DavEntry) -> Unit,
     onBack: () -> Unit,
     onSystemBack: () -> Unit = onBack,
+    onSchemeResolved: (String) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -471,6 +474,10 @@ private fun BrowseScreen(
             val result = client.list(currentPath)
             if (seq != reqSeq) return@launch // 已被更新的请求取代
             loading = false
+            // 自动切换协议成功: 把实际生效的 scheme 写回, 保证后续播放 URL / 选集也正确
+            if (result.baseUsed != null && result.baseUsed != s.scheme) {
+                onSchemeResolved(result.baseUsed)
+            }
             if (result.error != null) {
                 error = result.error
             } else if (result.entries.isEmpty()) {
@@ -647,6 +654,7 @@ private fun PlayerScreen(
     currentPath: String = "",
     onSwitchEpisode: (DavEntry) -> Unit,
     onSystemBack: () -> Unit,
+    onSchemeResolved: (String) -> Unit = {},
 ) {
     val name = entry?.name ?: ""
     val videoSize = entry?.size ?: 0L
@@ -757,6 +765,9 @@ private fun PlayerScreen(
         val client = WebDavClient("${s.scheme}://${s.host}:${s.port}${s.basePath}", user, pass)
         val result = client.list(currentPath)
         episodesLoading = false
+        if (result.baseUsed != null && result.baseUsed != s.scheme) {
+            onSchemeResolved(result.baseUsed)
+        }
         if (result.error == null) {
             episodes = result.entries
                 .filter { !it.isDir && fileType(it.name).third }
