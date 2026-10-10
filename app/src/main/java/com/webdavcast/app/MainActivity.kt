@@ -461,9 +461,9 @@ private fun HistoryScreen(
                             Column(Modifier.weight(1f)) {
                                 Text(h.title, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Spacer(Modifier.height(3.dp))
-                                // 来源行: 服务器备注名 + 所在目录
-                                val srcName = serverNames[h.url.substringAfter("//", "").substringBefore("/")]
-                                val srcLabel = srcName ?: h.url.substringAfter("//", "").substringBefore(":")
+                                // 来源行: 服务器名称(B.com解析的/备注名), 没有 name 时才显示 host
+                                val hostPort = h.url.substringAfter("//", "").substringBefore("/")
+                                val srcLabel = serverNames[hostPort] ?: hostPort.substringBefore(":")
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(srcLabel, fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.primary,
@@ -558,7 +558,11 @@ private fun BrowseScreen(
             } else if (result.entries.isEmpty()) {
                 error = "目录是空的"
             } else {
-                entries = result.entries
+                // 排序: 文件夹在前, 同类按文件名自然排序(01 02 03... 10; 未补零的 2 也在 10 前)
+                entries = result.entries.sortedWith(
+                    compareByDescending<DavEntry> { it.isDir }
+                        .thenComparator { a, b -> naturalCompare(a.name, b.name) }
+                )
             }
         }
     }
