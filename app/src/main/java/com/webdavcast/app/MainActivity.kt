@@ -129,6 +129,8 @@ fun WebdavCastApp() {
     var browseSavedIndex by rememberSaveable { mutableStateOf(0) }
     // 进入播放页的来源是否为历史: 从历史进入时返回直接回历史, 不回文件目录
     var fromHistory by rememberSaveable { mutableStateOf(false) }
+    // 服务器列表(缓存): 历史页显示来源名用
+    var cachedServers by remember { mutableStateOf(AddressResolver.decode(Prefs.getServerCache(ctx))) }
 
     when (screen) {
         Screen.Setup -> SetupScreen(
@@ -174,6 +176,7 @@ fun WebdavCastApp() {
             onSchemeResolved = { serverScheme = it },
         )
         Screen.History -> HistoryScreen(
+            serverList = cachedServers,
             onPlay = { h ->
                 // 从历史续播: 若服务器地址已变(如 a.com→b.com), 用当前服务器替换URL前缀重定位
                 fromHistory = true
@@ -364,14 +367,20 @@ private fun SetupScreen(
 
 @Composable
 private fun HistoryScreen(
+    serverList: List<ServerEntry>,
     onPlay: (PlayHistory) -> Unit,
     onBack: () -> Unit,
 ) {
     val ctx = LocalContext.current
     var historyList by remember { mutableStateOf(Prefs.getHistoryForList(ctx)) }
     val scope = rememberCoroutineScope()
-    // 服务器备注名: host:port -> "家里NAS"
-    val serverNames = remember { Prefs.getServerNames(ctx) }
+    // 来源名: 优先服务器列表里的 name(B.com 解析的), 其次备注名 map, 最后 host
+    val serverNames = remember {
+        val m = mutableMapOf<String, String>()
+        for (s in serverList) if (s.name.isNotBlank()) m["${s.host}:${s.port}"] = s.name
+        m.putAll(Prefs.getServerNames(ctx).filter { (k, v) -> v.isNotBlank() && m[k].isNullOrBlank() })
+        m
+    }
     // 当前滑开的条目 URL(一次只保留一条)
     var swipedUrl by remember { mutableStateOf<String?>(null) }
     // 系统返回键: 回首页(否则直接退到桌面)
