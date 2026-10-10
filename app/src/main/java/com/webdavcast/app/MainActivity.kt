@@ -421,15 +421,17 @@ private fun HistoryScreen(
                                     historyList = Prefs.getHistoryForList(ctx)
                                     swipedUrl = null
                                 }
-                                .padding(end = 24.dp),
+                                .padding(end = 20.dp),
                             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("删除", color = androidx.compose.ui.graphics.Color.White,
-                                fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         }
                         val isSwiped = swipedUrl == h.url
-                        var dragX by remember(h.url) { mutableFloatStateOf(if (isSwiped) -110f else 0f) }
+                        // 滑开宽度: 96dp(转像素), 保证「删除」文字完整露出
+                        val swipePx = with(LocalDensity.current) { 96.dp.toPx() }
+                        var dragX by remember(h.url) { mutableFloatStateOf(if (isSwiped) -swipePx else 0f) }
                         Card(
                             modifier = Modifier.fillMaxWidth()
                                 .graphicsLayer { translationX = dragX }
@@ -437,12 +439,12 @@ private fun HistoryScreen(
                                     detectHorizontalDragGestures(
                                         onDragEnd = {
                                             // 超过阈值滑开并停住, 否则弹回
-                                            if (dragX < -60f) { dragX = -110f; swipedUrl = h.url }
+                                            if (dragX < -swipePx / 2) { dragX = -swipePx; swipedUrl = h.url }
                                             else { dragX = 0f; if (swipedUrl == h.url) swipedUrl = null }
                                         },
                                         onHorizontalDrag = { change, amount ->
                                             change.consume()
-                                            val nx = (dragX + amount).coerceIn(-110f, 0f)
+                                            val nx = (dragX + amount).coerceIn(-swipePx, 0f)
                                             // 有其它滑开的条目时, 拖动这条会先收回那条
                                             if (swipedUrl != null && swipedUrl != h.url) swipedUrl = null
                                             dragX = nx
