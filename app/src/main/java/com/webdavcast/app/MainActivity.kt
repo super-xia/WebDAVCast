@@ -14,6 +14,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.Icon
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -366,6 +370,10 @@ private fun HistoryScreen(
     val ctx = LocalContext.current
     var historyList by remember { mutableStateOf(Prefs.getHistoryForList(ctx)) }
     val scope = rememberCoroutineScope()
+    // 服务器备注名: host:port -> "家里NAS"
+    val serverNames = remember { Prefs.getServerNames(ctx) }
+    // 当前滑开的条目 URL(一次只保留一条)
+    var swipedUrl by remember { mutableStateOf<String?>(null) }
     // 系统返回键: 回首页(否则直接退到桌面)
     androidx.activity.compose.BackHandler(onBack = onBack)
 
@@ -391,20 +399,77 @@ private fun HistoryScreen(
         } else {
             LazyColumn(Modifier.weight(1f)) {
                 items(historyList) { h ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 5.dp)
-                            .clickable { onPlay(h) },
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                    ) {
+                    // 底部红色删除区 + 可左滑的卡片
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp)) {
+                        // 删除背景(始终在卡片下层)
+                        Row(
+                            Modifier.matchParentSize()
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+                                .background(androidx.compose.ui.graphics.Color(0xFFE05252))
+                                .clickable {
+                                    // 点红色区 = 确认删除
+                                    Prefs.removeHistory(ctx, h.url)
+                                    historyList = Prefs.getHistoryForList(ctx)
+                                    swipedUrl = null
+                                }
+                                .padding(end = 24.dp),
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("删除", color = androidx.compose.ui.graphics.Color.White,
+                                fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        val isSwiped = swipedUrl == h.url
+                        var dragX by remember(h.url) { mutableFloatStateOf(if (isSwiped) -110f else 0f) }
+                        Card(
+                            modifier = Modifier.fillMaxWidth()
+                                .graphicsLayer { translationX = dragX }
+                                .pointerInput(h.url) {
+                                    detectHorizontalDragGestures(
+                                        onDragEnd = {
+                                            // 超过阈值滑开并停住, 否则弹回
+                                            if (dragX < -60f) { dragX = -110f; swipedUrl = h.url }
+                                            else { dragX = 0f; if (swipedUrl == h.url) swipedUrl = null }
+                                        },
+                                        onHorizontalDrag = { change, amount ->
+                                            change.consume()
+                                            val nx = (dragX + amount).coerceIn(-110f, 0f)
+                                            // 有其它滑开的条目时, 拖动这条会先收回那条
+                                            if (swipedUrl != null && swipedUrl != h.url) swipedUrl = null
+                                            dragX = nx
+                                        }
+                                    )
+                                }
+                                .clickable { onPlay(h) },
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 14.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             Text("🎬", fontSize = 22.sp)
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(h.title, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(Modifier.height(3.dp))
+                                // 来源行: 服务器备注名 + 所在目录
+                                val srcName = serverNames[h.url.substringAfter("//", "").substringBefore("/")]
+                                val srcLabel = srcName ?: h.url.substringAfter("//", "").substringBefore(":")
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(srcLabel, fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier
+                                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (h.dirPath.isNotBlank() && h.dirPath != "/") {
+                                        Spacer(Modifier.width(5.dp))
+                                        Text(h.dirPath, fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
                                 Spacer(Modifier.height(3.dp))
                                 if (h.durationMs > 0 && h.positionMs > 0) {
                                     Text("已看 ${formatMs(h.positionMs)} / ${formatMs(h.durationMs)} · 继续播放 ▶",
@@ -416,6 +481,7 @@ private fun HistoryScreen(
                                 }
                             }
                             Text("›", fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         }
                     }
                 }
@@ -628,7 +694,9 @@ private fun inferDirFromUrl(url: String, server: ServerEntry?): String {
     // 去掉 basePath 前缀
     val bp = server?.basePath?.trim('/') ?: ""
     if (bp.isNotEmpty() && rel.startsWith(bp)) rel = rel.removePrefix(bp).trimStart('/')
-    return if (rel.isEmpty()) "/" else "/$rel/"
+    // URL 解码: 旧历史里的路径可能是编码过的(%E7%94%B5%E5%BD%B1), 显示/回目录需要中文
+    val dec = try { java.net.URLDecoder.decode(rel, "UTF-8") } catch (e: Exception) { rel }
+    return if (dec.isEmpty()) "/" else "/$dec/"
 }
 
 /** href 转内部相对路径(支持绝对URL/相对路径, 去 basePath 前缀, 避免 urlOf 重复拼接)。 */
@@ -638,12 +706,14 @@ private fun relativePath(s: ServerEntry, href: String): String {
     if (p.startsWith("http://") || p.startsWith("https://")) {
         p = p.substringAfter("://").substringAfter("/", "").let { "/$it" }
     }
+    // href 通常是 URL 编码的(%E7%94%B5%E5%BD%B1), 先解码得到正常中文路径(显示与请求都用解码后的相对路径, urlOf 时再统一编码)
+    val decoded = try { java.net.URLDecoder.decode(p, "UTF-8") } catch (e: Exception) { p }
     // 2. 去掉 basePath 前缀: /dav/电影/ -> /电影/
-    if (s.basePath.isNotEmpty() && p.startsWith(s.basePath)) {
-        p = p.removePrefix(s.basePath)
+    if (s.basePath.isNotEmpty() && decoded.startsWith(s.basePath)) {
+        return decoded.removePrefix(s.basePath).trimStart('/').let { if (it.isEmpty()) "/" else "/$it".let { q -> if (q.endsWith("/")) q else "$q/" } }
     }
     // 3. 保证以 / 开头并带尾斜杠
-    return p.trimStart('/').let { if (it.isEmpty()) "/" else "/$it".let { q -> if (q.endsWith("/")) q else "$q/" } }
+    return decoded.trimStart('/').let { if (it.isEmpty()) "/" else "/$it".let { q -> if (q.endsWith("/")) q else "$q/" } }
 }
 
 @Composable

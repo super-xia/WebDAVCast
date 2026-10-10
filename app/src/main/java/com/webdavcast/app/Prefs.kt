@@ -119,4 +119,36 @@ private fun dirKeyOf(dirPath: String): String {
     }
 
     fun clearHistory(c: Context) = sp(c).edit { remove("play_history") }
+
+    /** 删除单条历史(按 URL 路径键匹配, 服务器地址变了也能删到同一条)。返回是否删除成功。 */
+    fun removeHistory(c: Context, url: String): Boolean {
+        val k = keyOf(url)
+        val list = getHistory(c)
+        val rest = list.filter { keyOf(it.url) != k }
+        if (rest.size == list.size) return false
+        sp(c).edit {
+            putString("play_history", rest.joinToString("\n") {
+                "${it.url}|${encTitle(it.title)}|${it.positionMs}|${it.durationMs}|${it.watchedAt}|${encPath(it.dirPath)}"
+            })
+        }
+        return true
+    }
+
+    // ---------- 服务器备注名 ----------
+    // 存储格式: 每行 host:port|备注名, 用于历史页显示来源(如 "家里NAS")
+    fun getServerNames(c: Context): Map<String, String> {
+        val raw = sp(c).getString("server_names", "") ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        for (line in raw.lineSequence()) {
+            val idx = line.indexOf('|')
+            if (idx > 0) out[line.substring(0, idx)] = line.substring(idx + 1)
+        }
+        return out
+    }
+
+    fun setServerName(c: Context, hostPort: String, name: String) {
+        val map = getServerNames(c).toMutableMap()
+        if (name.isBlank()) map.remove(hostPort) else map[hostPort] = name
+        sp(c).edit { putString("server_names", map.entries.joinToString("\n") { "${it.key}|${it.value}" }) }
+    }
 }
