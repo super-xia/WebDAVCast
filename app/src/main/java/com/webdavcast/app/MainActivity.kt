@@ -68,6 +68,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         appContext = applicationContext
+        // 后台预热视频缓存(建 SQLite 索引/扫目录)。低优先级 + 延迟 3 秒启动,
+        // 避免和启动渲染抢 CPU/IO。播放器用 LazyCacheFactory, 缓存没热好也能正常播。
+        Thread {
+            runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }
+            Thread.sleep(3_000)
+            runCatching { VideoCache.get(applicationContext) }
+        }.start()
         setContent {
             MaterialTheme(
                 colorScheme = androidx.compose.material3.lightColorScheme(
@@ -794,16 +801,20 @@ private fun PlayerScreen(
         if (isFullscreen) toggleFullscreen() else onSystemBack()
     })
 
-    val player = remember {
-        // 用 OkHttpDataSource: OkHttp 自动处理中文URL编码、302重定向跟随、Basic认证头
+    // OkHttp 数据源(原逻辑不变: 中文URL编码/302重定向/Basic认证)
+    val okHttpDsFactory = remember(user, pass) {
         val okHttp = UnsafeOkHttp.client()
-        val dsFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttp)
+        androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttp)
             .setUserAgent("WebDAVCast/1.0")
             .setDefaultRequestProperties(
                 mapOf("Authorization" to BasicAuth.header(user, pass))
             )
-        ExoPlayer.Builder(ctx).setMediaSourceFactory(
-            ProgressiveMediaSource.Factory(dsFactory)
+    }
+    // 预存 + 本地缓存: 起播门槛 2.5 秒不变, 播放中自动预存 120 秒并落盘(上限 1GB / 超 7 天自动清)
+    // LazyCacheFactory: 缓存未就绪时自动降级纯网络, 就绪后自动生效, 全程不阻塞 UI
+    val player = remember(ctx) {
+        VideoCache.playerBuilder(ctx).setMediaSourceFactory(
+            ProgressiveMediaSource.Factory(VideoCache.LazyCacheFactory(ctx, okHttpDsFactory))
         ).build()
     }
 
